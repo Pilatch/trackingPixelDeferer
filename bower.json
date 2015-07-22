@@ -1,0 +1,37 @@
+{
+  "name": "trackingPixelDeferrer",
+  "version": "0.0.1",
+  "description": "Utility for firing tracking pixels and executing functions after the window's load event, in a way that does not adversely affect page performance timings.",
+  "main": "dist/trackingPixelDeferrer.min.js",
+  "moduleType": [
+    "globals"
+  ],
+  "devDependencies": {
+    "jasmine": "~2.2"
+  },
+  "keywords": [
+    "tracking",
+    "pixels",
+    "pixels",
+    "performance",
+    "window.onload",
+    "performance",
+    "timings",
+    "user",
+    "tracking",
+    "asynchronous",
+    "callbacks"
+  ],
+  "authors": [
+    "Ethan B Martin"
+  ],
+  "license": "MIT",
+  "private": true,
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ]
+}
