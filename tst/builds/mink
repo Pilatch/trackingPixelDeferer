@@ -92,6 +92,11 @@ cssCompressor='yui2.4.8' # (optional)
 shortenOutputFileNames='1' # (optional)
  # Whether to use shorter output file names instead of the longer, old ant-min-cat style.
  # (1 = short; 0 or blank = long)
+automaticallyBuildDependentModules='0' # (optional)
+ # This feature is experimental!
+ # Whenever Mink builds a module that should affect other modules downstream,
+ # (because of Mink references), build those modules too.
+ # (1 = ON; 0 or blank = OFF)
 minkServiceBase='http://mink.tools.us.gspt.net' # (required)
  # The base URL for the Mink web service.
  # Only modify this if you know some other Mink service host you would rather use.
@@ -100,11 +105,12 @@ minkServiceBase='http://mink.tools.us.gspt.net' # (required)
 ##  Don't mess with stuff below here.  ##
 #########################################
 
-minkShellScriptVersion='0.93.0'
+minkShellScriptVersion='0.94.1'
 topLevelPid=$$ #necessary for exiting out of functions
 mode='min'
 base64VarNames='markupHeader markupFooter externalServer externalServerPathVar assetsWrapStart assetsWrapEnd'
 debugOn='' #set to any non-blank string to turn on debugging
+minkClientScript=$(basename ${BASH_SOURCE[0]} ) #the file name of this script
 cd $(dirname ${BASH_SOURCE[0]} )
 originalArgs="$*"
 
@@ -121,22 +127,22 @@ while [[ $1 ]]
 do
 	if [[ $1 =~ ^- ]] #it's an option
 	then
-		if [[ $1 =~ ^-*-[hdub] ]] #it's an option not followed by an argument
+		if [[ $1 =~ ^-*-h ]]
 		then
-			if [[ $1 =~ ^-*-h ]]
-			then
-				mode='help'
-				break
-			elif [[ $1 =~ ^-*-d ]]
-			then
-				mode='dev'
-			elif [[ $1 =~ ^-*-u ]]
-			then
-				mode='update'
-			elif [[ $1 =~ ^-*-b ]]
-			then
-				mode='builtModulesList'
-			fi
+			mode='help'
+			break
+		elif [[ $1 == "-d" || $1 == "--dev" ]]
+		then
+			mode='dev'
+		elif [[ $1 =~ ^-*-u ]]
+		then
+			mode='update'
+		elif [[ $1 == --dontBuildDownstream ]]
+		then
+			automaticallyBuildDependentModules=''
+		elif [[ $1 =~ ^-*-b ]]
+		then
+			mode='builtModulesList'
 		else
 			echo "Unrecognized option $1" >&2
 			exit 1
@@ -312,6 +318,7 @@ makeUpdateCurlCommand() {
 	-F cssCompressor=$cssCompressor \
 	-F jsCompressor=$jsCompressor \
 	-F shortenOutputFileNames=$shortenOutputFileNames \
+	-F automaticallyBuildDependentModules=$automaticallyBuildDependentModules \
 	-F cacheBuster=$cacheBuster \
 	$minkServiceBase/shell-script"
 }
@@ -323,6 +330,7 @@ makeXmlCurlCommand() {
 	-F sessionId=$sessionId \
 	-F mode=$mode \
 	-F pwd=$PWD \
+	-F minkClientScript=$minkClientScript \
 	-F projectRoot=$projectRoot \
 	-F webAppRoot=$webAppRoot \
 	-F webAppRootDirName=$webAppRootDirName \
@@ -381,7 +389,7 @@ makeCompressJsCssCurlCommand() {
 	$(addSourceFilesParam "$sourceFileList")"
 	curlCmd="$curlCmd \
 	-F xmlFileName=$xmlFileName \
-	-F platform=$platform
+	-F platform=$platform \
 	-F sessionId=$sessionId \
 	-F outDir=$outDir \
 	-F tagType=$tagType \
@@ -392,6 +400,7 @@ makeCompressJsCssCurlCommand() {
 	-F jsCompressor=$jsCompressor \
 	-F outDirContents=$(dirContentsBase64Encoded $outDir) \
 	-F buildsDir=$startingDir \
+	-F minkClientScript=$minkClientScript \
 	$minkServiceBase/compressJsCss"
 	echo $curlCmd
 }
@@ -486,7 +495,7 @@ sendRequestedSourceFiles() {
 				fi
 				if [ ! -s "$payloadFileName" ]
 				then
-					getError
+					getError "$xmlFile"
 					fail
 				fi
 				writeManipulatedSourceFilesFromPayload "$tmpManipulatedSourceFilesExtractionDir" "$payloadFileName"
@@ -509,6 +518,7 @@ makeCompressImagesCurlCommand() {
 	-F platform=$platform \
 	-F cacheBuster=$cacheBuster \
 	-F outDirContents=$(dirContentsBase64Encoded $outDir) \
+	-F minkClientScript=$minkClientScript \
 	-F buildsDir=$startingDir "
 	for sourceFile in $sourceFileList
 	do
@@ -558,7 +568,7 @@ makeManipulateSourceFilesCurlCommand() {
 writeManipulatedSourceFilesFromPayload() {
 	declare tmpManipulatedSourceFilesExtractionDir="$1"; declare payloadFileName="$2"
 	cd $tmpManipulatedSourceFilesExtractionDir
-	tar xfz $payloadFileName
+	tar xfz $payloadFileName 2>/dev/null
 	cd - >/dev/null
 	declare filteredSourceFilesDir="filteredSourceFiles"
 	if [ -d "$tmpManipulatedSourceFilesExtractionDir/$filteredSourceFilesDir" ]
@@ -582,6 +592,49 @@ writeManipulatedSourceFilesFromPayload() {
 	fi
 }
 
+buildDependentModules() {
+	if [ -n "$automaticallyBuildDependentModules" -a ! "$automaticallyBuildDependentModules" = "0" ]
+	then
+		declare dependentModulesToBuildDir="$1/dependentModulesToBuild"
+		if [ -d "$dependentModulesToBuildDir" ]
+		then
+			pushd $dependentModulesToBuildDir >/dev/null
+			for dependentBuildsDataDir in $(find . -type d -name "dependentBuildsData-*")
+			do
+				pushd $dependentBuildsDataDir >/dev/null
+				declare buildsDir=$(cat buildsDir)
+				declare minkClientScript=$(cat minkClientScript)
+				declare modulesToBuild=$(cat modulesToBuild | tr '\n' ' ')
+				if [ -z "$buildsDir" -o -z "$minkClientScript" -o -z "$modulesToBuild" ]
+				then
+					echo "The web service reports that dependent modules should also be built, but was unable to provide all the information necessary. :(" >&2
+				else
+					pushd $buildsDir >/dev/null
+					declare moduleXmlFiles=""
+					for moduleName in $modulesToBuild
+					do
+						moduleXmlFiles="$moduleXmlFiles "$(find . -regex '^\./'$moduleName'\.[xX][mM][lL]$')
+					done
+					if [ -n "$moduleXmlFiles" ]
+					then
+						[[ ! $startingDir == $buildsDir ]] && echo "Moving to builds location $buildsDir" >&2
+						echo "Building dependent module(s): $modulesToBuild" >&2
+					else
+						echo "Could not find dependent module files to build: $modulesToBuild :(" >&2
+					fi
+					declare scriptOptions=""
+					[[ $mode == 'dev' ]] && scriptOptions="--dev"
+					./$minkClientScript $scriptOptions $moduleXmlFiles
+					popd >/dev/null
+				fi
+				popd >/dev/null
+			done
+			popd >/dev/null
+			#TODO ethan, test by moving to multiple builds directories, perhaps a global upstream module gets updated?
+		fi
+	fi
+}
+
 trap 'cleanup; exit 1;' INT
 
 if [[ $mode != 'update' ]]
@@ -599,6 +652,7 @@ options:
 -d, --dev                         Development mode. (Default is minify mode.)
 -b, --builtModulesList            List web paths of built modules.
 -u, --update                      Update this shell script to the latest version.
+--dontBuildDownstream             Build only modules specified and not downstream modules.
 -h, --help                        Show this message.
 "
 	exit 1
@@ -633,20 +687,22 @@ fi
 
 for xmlFile in $xmlFileList
 do
-	curlCmd=$(makeXmlCurlCommand "$xmlFile" "$sessionId" $mode)
+	xmlFileBaseName=$(basename $xmlFile)
+	[ ! -e "$xmlFileBaseName" ] && fail "Module file $xmlFile must be in the same directory as $minkClientScript"
+	curlCmd=$(makeXmlCurlCommand "$xmlFileBaseName" "$sessionId" $mode)
 	debug "curl command for xml file: $curlCmd"
 
 	if [[ $mode == 'min' ]]
 	then
 		tmpSourceListsPayloadFileName="/tmp/$sessionId.mink-source-lists-payload.tar.gz"
-		trySendingXml "$curlCmd" $tmpSourceListsPayloadFileName $xmlFile
+		trySendingXml "$curlCmd" $tmpSourceListsPayloadFileName $xmlFileBaseName
 		#the curl command should return a tarball full of text lists of filenames,
 		#that it will then want us to send in successive curls, below
 		#each file therein should be named for its file extension
 		#unload all the lists of source files to a temporary directory
 		tmpPayloadExtractionDir=$(makeTemporaryPayloadExtractionDir ".SL")
 		cd $tmpPayloadExtractionDir
-		tar xfz $tmpSourceListsPayloadFileName
+		tar xfz $tmpSourceListsPayloadFileName 2>/dev/null
 		cd - >/dev/null
 		movePayloadDirOutputFilesToProject "$tmpPayloadExtractionDir" #if the xml had minkRefs in it, this might happen
 		tmpSourceListsDir="$tmpPayloadExtractionDir/requestedSourceFiles"
@@ -674,33 +730,34 @@ do
 				tmpCompressedPayloadFileName="/tmp/$sessionId.mink-compressed-payload.tar.gz"
 				if [[ $tagType == 'script' || $tagType == 'link' ]]
 				then
-					curlCmd=$(makeCompressJsCssCurlCommand "$sessionId" $tagType $keepSessionAlive "$xmlFile" "$sourceFileList")
+					curlCmd=$(makeCompressJsCssCurlCommand "$sessionId" $tagType $keepSessionAlive "$xmlFileBaseName" "$sourceFileList")
 				elif [[ $tagType == 'img' ]]
 				then
-					curlCmd=$(makeCompressImagesCurlCommand "$sessionId" $keepSessionAlive "$xmlFile" "$sourceFileList")
+					curlCmd=$(makeCompressImagesCurlCommand "$sessionId" $keepSessionAlive "$xmlFileBaseName" "$sourceFileList")
 				else
 					fail "Unknown tagType '$tagType'"
 				fi
 				$curlCmd > $tmpCompressedPayloadFileName
 				curlExitStatus=$?
-				[ -e "$tmpFileCattedAssets" ] && rm $tmpFileCattedAssets
 				[[ $curlExitStatus != 0 ]] && fail "Curl exit status $curlExitStatus. Trouble getting minified assets :("
 				[ ! -e "$tmpCompressedPayloadFileName" ] && fail "No payload file found. :("
 				if [ ! -s "$tmpCompressedPayloadFileName" ]
 				then
 					rm $tmpCompressedPayloadFileName
-					getError $xmlFile || echo "Payload file had no data. :(" >&2
+					getError $xmlFileBaseName || echo "Payload file had no data. :(" >&2
 					fail
 				fi
 				tmpPayloadDir=$(deployPayload $tmpCompressedPayloadFileName)
+				buildDependentModules $tmpPayloadDir
 			done
 		fi
 	elif [[ $mode == 'dev' ]]
 	then
 		tmpDevPayloadFileName="/tmp/$sessionId.mink-dev-payload.tar.gz"
-		trySendingXml "$curlCmd" $tmpDevPayloadFileName $xmlFile
+		trySendingXml "$curlCmd" $tmpDevPayloadFileName $xmlFileBaseName
 		tmpPayloadDir=$(deployPayload $tmpDevPayloadFileName)
-		sendRequestedSourceFiles $tmpPayloadDir $xmlFile
+		sendRequestedSourceFiles $tmpPayloadDir $xmlFileBaseName
+		buildDependentModules $tmpPayloadDir
 		cleanup
 	else
 		fail "Unknown mode $mode :("

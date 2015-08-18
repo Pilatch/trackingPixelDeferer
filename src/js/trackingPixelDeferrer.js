@@ -85,6 +85,10 @@
     }
   }
 
+  //guard against multiple scripts including this,
+  //and wiping out whatever's in the first one's pixelQueue
+  if (global[globalTrackingPixelDeferrerNamespaceEntry]) return
+
   /**
    * <p>An object that queues up tracking pixels to be fired in a way that does affect page performance timings.</p>
    * <p>You really should only ever need to use its .add method</p>

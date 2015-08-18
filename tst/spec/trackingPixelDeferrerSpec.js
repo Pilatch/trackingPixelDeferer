@@ -38,12 +38,18 @@ if (window.testExposure) {
     var pixelQueueLengthAfterTwoAdds
     var typeOfTestResourceFooAtWindowLoadEvent
     var lengthOfPixelQueueAtWindowLoadEvent
+    var redundantScript
+    var pixelQueueLengthAfterRedundantScript
 
     trackingPixelDeferrer.add("/tst/resources/tiny-goomba.png", "img")
     pixelQueueLengthAfterOneAdd = pixelQueue.length
     trackingPixelDeferrer.add("/tst/resources/foo.js", "script")
     pixelQueueLengthAfterTwoAdds = pixelQueue.length
     trackingPixelDeferrer.add("/tst/resources/iframe.html", "iframe")
+    redundantScript = document.createElement("script")
+    redundantScript.src = "/src/js/trackingPixelDeferrer.js"
+    document.getElementsByTagName("head")[0].appendChild(redundantScript)
+    pixelQueueLengthAfterRedundantScript = pixelQueue.length
     describe("Initial state of trackingPixelDeferrer", function () {
       it("should not have had its .add function called yet in this test", function () {
         expect(numberOfTimesAddWasCalledInitially).toBe(0)
@@ -54,6 +60,9 @@ if (window.testExposure) {
       it(".add should add one pixel at a time", function () {
         expect(pixelQueueLengthAfterOneAdd).toBe(1)
         expect(pixelQueueLengthAfterTwoAdds).toBe(2)
+      })
+      it("should not blank out the pixel queue if the deferrer is included more than once", function () {
+        expect(pixelQueueLengthAfterRedundantScript).not.toBe(0)
       })
     })
     describe("TrackingPixelData", function () {
@@ -182,6 +191,7 @@ if (window.testExposure) {
     })
   })(window.testExposure.pixelQueue, window.testExposure.TrackingPixelData)
 } else {
+  //production mode!
   trackingPixelDeferrer.add("/tst/resources/tiny-goomba.png")
   trackingPixelDeferrer.add("/tst/resources/foo.js", "script")
   trackingPixelDeferrer.add("/tst/resources/iframe.html", "iframe")
